@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import mean_squared_error
-from sklearn.model_selection import train_test_split, LeaveOneOut, cross_val_score
+from sklearn.model_selection import train_test_split, LeaveOneOut, cross_val_score, StratifiedShuffleSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeRegressor
@@ -19,7 +19,10 @@ from sklearn.metrics import classification_report
 from sklearn.model_selection import StratifiedKFold, GridSearchCV, RandomizedSearchCV, cross_val_score
 from hyperopt import tpe, STATUS_OK, Trials, hp, fmin, STATUS_OK, space_eval
 from sklearn.preprocessing import StandardScaler
-from bayes_opt import BayesianOptimization, UtilityFunction
+from sklearn.model_selection import learning_curve
+from sklearn.metrics import f1_score
+
+# from bayes_opt import BayesianOptimization, UtilityFunction
 # from autosklearn.classification import AutoSklearnClassifier
 
 
@@ -44,7 +47,7 @@ print(X_train.shape)
 print(X_test.shape)
 
 
-# Initiate scaler
+
 sc = StandardScaler()
 # Standardize the training dataset
 X_train_transformed = pd.DataFrame(sc.fit_transform(X_train),index=X_train.index, columns=X_train.columns)
@@ -53,100 +56,163 @@ X_test_transformed = pd.DataFrame(sc.transform(X_test),index=X_test.index, colum
 # Summary statistics after standardization
 X_train_transformed.describe().T
 
-# Check default values
-svc = SVC()
-params = svc.get_params()
-params_df = pd.DataFrame(params, index=[0])
-params_df.T
 
-
-
-# SVM without Hyperparameter Tuning
-model = SVC()
+# Random Forest without Hyperparameter Tuning
+model = RandomForestClassifier(random_state=50)
 model.fit(X_train, y_train)
+baseline_predictions_train = model.predict(X_train)
+baseline_accuracy_train = accuracy_score(y_train, baseline_predictions_train)
+print(f"Baseline Training Accuracy: {baseline_accuracy_train:.4f}")
 
-# print prediction results
+
 predictions = model.predict(X_test)
-print(classification_report(y_test, predictions))
-
-# defining parameter range
-param_grid = {'C': [0.1, 1, 10, 100, 1000],
-              'gamma': [1, 0.1, 0.01, 0.001, 0.0001],
-              'kernel': ['rbf']}
-
-# Set up score
-scoring = ['accuracy']
-# Set up the k-fold cross-validation
-kfold = StratifiedKFold(n_splits=3, shuffle=True, random_state=0)
+print(f"Predictions of Random Forest without Hyperparameter TRuning: {classification_report(y_test, predictions)}")
+accuracy_baseline = accuracy_score(y_test, predictions)
+print(f"Accuracy_baseline: {accuracy_baseline:.4f}")
+score = cross_val_score(model, X_train, y_train, cv=5, scoring='accuracy').mean()
+print(f"Accuracy_baseline: {score:.4f}")
+f1_without = f1_score(y_test, predictions, average='weighted')
+print(f"F1 Score: {f1_without:.4f}")
 
 
-grid = GridSearchCV(SVC(), param_grid, refit = True, verbose = 3)
+param_grid = {
+    'n_estimators': hp.choice('n_estimators', range(100, 1001, 100)),
+    'max_depth': hp.choice('max_depth', range(5, 31, 5)),
+    'min_samples_split': hp.choice('min_samples_split', range(2, 21, 2)),
+    'min_samples_leaf': hp.choice('min_samples_leaf', range(1, 21, 1)),
+    'max_features': hp.choice('max_features', ['sqrt', 'log2', None]),
+}
 
-# fitting the model for grid search
+grid = GridSearchCV(RandomForestClassifier(random_state=50), param_grid, refit=True, verbose=3)
 grid.fit(X_train, y_train)
 
-
-# print best parameter after tuning
 print(grid.best_params_)
-
-# print how our model looks after hyper-parameter tuning
 print(grid.best_estimator_)
-
 grid_predictions = grid.predict(X_test)
 
-# print classification report
-print(classification_report(y_test, grid_predictions))
+print(f"Prediction of Random Forest with GridSeaech: {classification_report(y_test, grid_predictions)}")
+accuracy_Grid = accuracy_score(y_test, grid_predictions)
+print(f"Accuracy_Grid: {accuracy_Grid:.4f}")
 
 
-# Hyperparameters optimization with Baysian Optimization
+grid_predictions_train = grid.best_estimator_.predict(X_train)
 
-# List of C values
-C_range = np.logspace(-1, 1, 3)
-print(f'The list of values for C are {C_range}')
-# List of gamma values
-gamma_range = np.logspace(-1, 1, 3)
-print(f'The list of values for gamma are {gamma_range}')
+grid_accuracy_train = accuracy_score(y_train, grid_predictions_train)
 
-# Space
+print(f"Grid Search Training Error: {grid_accuracy_train:.4f}")
+
+
 space = {
-    'C': hp.choice('C', C_range),
-    'gamma': hp.choice('gamma', gamma_range.tolist() + ['scale', 'auto']),
-    'kernel': hp.choice('kernel', ['rbf'])}
+    'n_estimators': hp.choice('n_estimators', range(100, 1001, 100)),
+    'max_depth': hp.choice('max_depth', range(5, 31, 5)),
+    'min_samples_split': hp.choice('min_samples_split', range(2, 21, 2)),
+    'min_samples_leaf': hp.choice('min_samples_leaf', range(1, 21, 1)),
+    'max_features': hp.choice('max_features', ['sqrt', 'log2', None]),
+    
+}
 
+scoring = ['accuracy']
+kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
 
-# Set up the k-fold cross-validation
-kfold = StratifiedKFold(n_splits=3, shuffle=True, random_state=0)#
-
-# Objective function
 def objective(params):
-    svc = SVC(**params)
-    scores = cross_val_score(svc, X_train_transformed, y_train, cv=kfold, scoring='accuracy', n_jobs=-1)
-    # Extract the best score
+
+    rf_model = RandomForestClassifier(**params)
+    scores = cross_val_score(rf_model, X_train_transformed, y_train, cv=kfold, scoring='accuracy', n_jobs=-1)
     best_score = np.mean(scores)
-    # Loss must be minimized
     loss = - best_score
-    # Dictionary with information for evaluation
     return {'loss': loss, 'params': params, 'status': STATUS_OK}
 
-
-# Trials to track progress
 bayes_trials = Trials()
-# Optimize
-best = fmin(fn=objective, space=space, algo=tpe.suggest, max_evals=100, trials=bayes_trials)
-
-
-# Print the index of the best parameters
+best = fmin(fn = objective, space = space, algo = tpe.suggest, max_evals = 100, trials = bayes_trials)
 print(best)
-# Print the values of the best parameters
 print(space_eval(space, best))
 
 
-# Train model using the best parameters
-svc_bo = SVC(C=space_eval(space, best)['C'], gamma=space_eval(space, best)['gamma'], kernel=space_eval(space, best)['kernel']).fit(X_train_transformed,y_train)
-# Print the best accuracy score for the testing dataset
-print(f'The accuracy score for the testing dataset is {svc_bo.score(X_test_transformed, y_test):.4f}')
+best_params = space_eval(space, best)
+rf_bo = RandomForestClassifier(**best_params, random_state=50).fit(X_train, y_train)
+print(f'The accuracy score for the testing dataset is {rf_bo.score(X_test, y_test):.4f}')
 
 
+
+bo_predictions_train = rf_bo.predict(X_train)
+
+# Calculate training accuracy
+bo_accuracy_train = accuracy_score(y_train, bo_predictions_train)
+print(f"Bayesian Optimization Training Accuracy: {bo_accuracy_train:.4f}")
+
+train_sizes, train_scores, test_scores = learning_curve(RandomForestClassifier(), X_train, y_train, cv=5)
+train_scores_mean = np.mean(train_scores, axis=1)
+test_scores_mean = np.mean(test_scores, axis=1)
+
+plt.plot(train_sizes, train_scores_mean, label='Training score')
+plt.plot(train_sizes, test_scores_mean, label='Cross-validation score')
+plt.title('Learning Curve')
+plt.xlabel('Training Size')
+plt.ylabel('Score')
+plt.legend()
+plt.show()
+
+
+def plot_learning_curve(estimator, X, y, ylim=None, cv=None, n_jobs=None, train_sizes=np.linspace(.1, 1.0, 5)):
+    plt.figure()
+    plt.title("Learning Curve")
+    if ylim is not None:
+        plt.ylim(*ylim)
+    plt.xlabel("Training examples")
+    plt.ylabel("Score")
+    train_sizes, train_scores, test_scores = learning_curve(
+        estimator, X, y, cv=cv, n_jobs=n_jobs, train_sizes=train_sizes)
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    test_scores_mean = np.mean(test_scores, axis=1)
+    test_scores_std = np.std(test_scores, axis=1)
+
+    plt.grid()
+
+    plt.fill_between(train_sizes, train_scores_mean - train_scores_std,
+                     train_scores_mean + train_scores_std, alpha=0.1, color="r")
+    plt.fill_between(train_sizes, test_scores_mean - test_scores_std,
+                     test_scores_mean + test_scores_std, alpha=0.1, color="g")
+    plt.plot(train_sizes, train_scores_mean, 'o-', color="r", label="Training score")
+    plt.plot(train_sizes, test_scores_mean, 'o-', color="g", label="Cross-validation score")
+
+    plt.legend(loc="best")
+    return plt
+
+
+# Assuming 'best_params' contains the best parameters found by Bayesian Optimization
+best_model = RandomForestClassifier(**best_params, random_state=50)
+
+# Plotting the learning curve
+plot_learning_curve(best_model, X, y, ylim=(0.1, 1.01), cv=5, n_jobs=4)
+
+def calculate_accuracies(model, X, y, train_sizes):
+    accuracies = []
+
+    for size in train_sizes:
+        test_size = 1 - size
+        if test_size <= 0.1: 
+            test_size = 0.1
+
+        sss = StratifiedShuffleSplit(n_splits=5, test_size=test_size, random_state=42)
+        score = cross_val_score(model, X, y, cv=sss, scoring='accuracy').mean()
+        accuracies.append(score)
+
+    return accuracies
+
+train_sizes = np.linspace(0.1, 1.0, 10)
+baseline_accuracies = calculate_accuracies(model, X, y, train_sizes)
+bayesian_accuracies = calculate_accuracies(best_model, X, y, train_sizes)    
+
+
+plt.figure(figsize=(10, 6))
+plt.plot(train_sizes, baseline_accuracies, label='Baseline Model', marker='o')
+plt.plot(train_sizes, bayesian_accuracies, label='Bayesian Optimization Model', marker='o')
+plt.title('Model Accuracy Comparison')
+plt.xlabel('Training Set Size')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
 
 
 
