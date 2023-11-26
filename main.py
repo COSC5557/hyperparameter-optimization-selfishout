@@ -21,7 +21,9 @@ from hyperopt import tpe, STATUS_OK, Trials, hp, fmin, STATUS_OK, space_eval
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import learning_curve
 from sklearn.metrics import f1_score
-
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.ensemble import RandomForestClassifier
+import scipy.stats as stats
 # from bayes_opt import BayesianOptimization, UtilityFunction
 # from autosklearn.classification import AutoSklearnClassifier
 
@@ -75,45 +77,61 @@ f1_without = f1_score(y_test, predictions, average='weighted')
 print(f"F1 Score: {f1_without:.4f}")
 
 
-param_grid = {
-    'n_estimators': hp.choice('n_estimators', range(100, 1001, 100)),
-    'max_depth': hp.choice('max_depth', range(5, 31, 5)),
-    'min_samples_split': hp.choice('min_samples_split', range(2, 21, 2)),
-    'min_samples_leaf': hp.choice('min_samples_leaf', range(1, 21, 1)),
-    'max_features': hp.choice('max_features', ['sqrt', 'log2', None]),
+param_rand = {
+    'n_estimators':  [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
+    'max_depth': [5, 10, 15, 20, 25, 30],
+    'min_samples_split':[2, 4, 6, 8, 10, 12, 14, 16, 18, 20],
+    'min_samples_leaf': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+    'max_features':['sqrt', 'log2', None],
 }
 
-grid = GridSearchCV(RandomForestClassifier(random_state=50), param_grid, refit=True, verbose=3)
-grid.fit(X_train, y_train)
-
-print(grid.best_params_)
-print(grid.best_estimator_)
-grid_predictions = grid.predict(X_test)
-
-print(f"Prediction of Random Forest with GridSeaech: {classification_report(y_test, grid_predictions)}")
-accuracy_Grid = accuracy_score(y_test, grid_predictions)
-print(f"Accuracy_Grid: {accuracy_Grid:.4f}")
+n_iter_search = 100
+random_search = RandomizedSearchCV(RandomForestClassifier(random_state=50), param_distributions=param_rand, n_iter=n_iter_search,
+    cv=5,               
+    random_state=42,
+    n_jobs=-1           
+)
+random_search.fit(X_train, y_train)
 
 
-grid_predictions_train = grid.best_estimator_.predict(X_train)
 
-grid_accuracy_train = accuracy_score(y_train, grid_predictions_train)
+# Print best parameters after tuning
+print(random_search.best_params_)
 
-print(f"Grid Search Training Error: {grid_accuracy_train:.4f}")
+# Print how our model looks after hyper-parameter tuning
+print(random_search.best_estimator_)
+
+random_predictions = random_search.predict(X_test)
+
+# Print classification report
+print(f"Prediction of Random Forest with GridSeaech: {classification_report(y_test, random_predictions)}")
+accuracy_random = accuracy_score(y_test, random_predictions)
+print(f"Accuracy_Grid: {accuracy_random:.4f}")
 
 
+random_predictions_train = random_search.best_estimator_.predict(X_train)
+
+# Calculate training accuracy
+random_accuracy_train = accuracy_score(y_train, random_predictions_train)
+
+print(f"Grid Search Training Error: {random_accuracy_train:.4f}")
+
+
+
+# Space for Bayesian Optimization Random Forest
 space = {
-    'n_estimators': hp.choice('n_estimators', range(100, 1001, 100)),
-    'max_depth': hp.choice('max_depth', range(5, 31, 5)),
-    'min_samples_split': hp.choice('min_samples_split', range(2, 21, 2)),
-    'min_samples_leaf': hp.choice('min_samples_leaf', range(1, 21, 1)),
+    'n_estimators': hp.choice('n_estimators', [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]),
+    'max_depth': hp.choice('max_depth',[5, 10, 15, 20, 25, 30]),
+    'min_samples_split': hp.choice('min_samples_split', [2, 4, 6, 8, 10, 12, 14, 16, 18, 20]),
+    'min_samples_leaf': hp.choice('min_samples_leaf', [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]),
     'max_features': hp.choice('max_features', ['sqrt', 'log2', None]),
-    
+
 }
-
 scoring = ['accuracy']
-kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
 
+# Set up the k-fold cross-validation
+kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+# Objective function
 def objective(params):
 
     rf_model = RandomForestClassifier(**params)
@@ -121,13 +139,18 @@ def objective(params):
     best_score = np.mean(scores)
     loss = - best_score
     return {'loss': loss, 'params': params, 'status': STATUS_OK}
-
 bayes_trials = Trials()
+# Optimize
 best = fmin(fn = objective, space = space, algo = tpe.suggest, max_evals = 100, trials = bayes_trials)
+
+# Print the index of the best parameters
 print(best)
+# Print the values of the best parameters
 print(space_eval(space, best))
 
 
+
+# Train model using the best parameters
 best_params = space_eval(space, best)
 rf_bo = RandomForestClassifier(**best_params, random_state=50).fit(X_train, y_train)
 print(f'The accuracy score for the testing dataset is {rf_bo.score(X_test, y_test):.4f}')
@@ -140,6 +163,7 @@ bo_predictions_train = rf_bo.predict(X_train)
 bo_accuracy_train = accuracy_score(y_train, bo_predictions_train)
 print(f"Bayesian Optimization Training Accuracy: {bo_accuracy_train:.4f}")
 
+
 train_sizes, train_scores, test_scores = learning_curve(RandomForestClassifier(), X_train, y_train, cv=5)
 train_scores_mean = np.mean(train_scores, axis=1)
 test_scores_mean = np.mean(test_scores, axis=1)
@@ -151,6 +175,8 @@ plt.xlabel('Training Size')
 plt.ylabel('Score')
 plt.legend()
 plt.show()
+
+
 
 
 def plot_learning_curve(estimator, X, y, ylim=None, cv=None, n_jobs=None, train_sizes=np.linspace(.1, 1.0, 5)):
@@ -186,12 +212,14 @@ best_model = RandomForestClassifier(**best_params, random_state=50)
 # Plotting the learning curve
 plot_learning_curve(best_model, X, y, ylim=(0.1, 1.01), cv=5, n_jobs=4)
 
+
 def calculate_accuracies(model, X, y, train_sizes):
     accuracies = []
 
     for size in train_sizes:
         test_size = 1 - size
-        if test_size <= 0.1: 
+        # Ensure test_size is not zero
+        if test_size <= 0.1:  # Set a minimum test size
             test_size = 0.1
 
         sss = StratifiedShuffleSplit(n_splits=5, test_size=test_size, random_state=42)
@@ -202,7 +230,7 @@ def calculate_accuracies(model, X, y, train_sizes):
 
 train_sizes = np.linspace(0.1, 1.0, 10)
 baseline_accuracies = calculate_accuracies(model, X, y, train_sizes)
-bayesian_accuracies = calculate_accuracies(best_model, X, y, train_sizes)    
+bayesian_accuracies = calculate_accuracies(best_model, X, y, train_sizes)
 
 
 plt.figure(figsize=(10, 6))
