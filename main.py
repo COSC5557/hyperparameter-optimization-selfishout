@@ -86,12 +86,41 @@ param_rand = {
 }
 
 n_iter_search = 100
-random_search = RandomizedSearchCV(RandomForestClassifier(random_state=50), param_distributions=param_rand, n_iter=n_iter_search,
-    cv=5,               
-    random_state=42,
-    n_jobs=-1           
-)
-random_search.fit(X_train, y_train)
+# random_search = RandomizedSearchCV(RandomForestClassifier(random_state=50), param_distributions=param_rand, n_iter=n_iter_search,
+#     cv=5,               
+#     random_state=42,
+#     n_jobs=-1           
+# )
+# random_search.fit(X_train, y_train)
+
+outer_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+# List to store each outer fold's accuracy
+outer_fold_accuracies = []
+
+for train_idx, test_idx in outer_cv.split(X, y):
+    X_train1, X_test1 = X.iloc[train_idx], X.iloc[test_idx]
+    y_train1, y_test1 = y.iloc[train_idx], y.iloc[test_idx]
+
+    # Inner CV and Random Search
+    inner_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    random_search = RandomizedSearchCV(model, param_distributions=param_rand, n_iter=10, cv=inner_cv)
+    random_search.fit(X_train1, y_train1)
+
+
+    outer_fold_accuracy = random_search.score(X_test1, y_test1)
+    # outer_fold_accuracy = random_search.predict(X_test1)
+    outer_fold_accuracies.append(outer_fold_accuracy)
+
+print("Outer_fold_accuracues: ")
+print(outer_fold_accuracies)
+
+plt.boxplot(outer_fold_accuracies, patch_artist=True)
+plt.title('Distribution of Accuracies Across Outer Folds')
+plt.ylabel('Accuracy')
+plt.xticks([1], ['Random Forest'])
+plt.show()
+
 
 
 
@@ -132,21 +161,56 @@ scoring = ['accuracy']
 # Set up the k-fold cross-validation
 kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
 # Objective function
+# def objective(params):
+
+#     rf_model = RandomForestClassifier(**params)
+#     scores = cross_val_score(rf_model, X_train_transformed, y_train, cv=kfold, scoring='accuracy', n_jobs=-1)
+#     best_score = np.mean(scores)
+#     loss = - best_score
+#     return {'loss': loss, 'params': params, 'status': STATUS_OK}
+# bayes_trials = Trials()
+# # Optimize
+# best = fmin(fn = objective, space = space, algo = tpe.suggest, max_evals = 100, trials = bayes_trials)
+
+# # Print the index of the best parameters
+# print(best)
+# # Print the values of the best parameters
+# print(space_eval(space, best))
+
 def objective(params):
+    clf = RandomForestClassifier(**params)
+    # Inner cross-validation
+    score = cross_val_score(clf, X_inner, y_inner, scoring='accuracy', cv=3).mean()
+    return {'loss': -score, 'status': STATUS_OK}
 
-    rf_model = RandomForestClassifier(**params)
-    scores = cross_val_score(rf_model, X_train_transformed, y_train, cv=kfold, scoring='accuracy', n_jobs=-1)
-    best_score = np.mean(scores)
-    loss = - best_score
-    return {'loss': loss, 'params': params, 'status': STATUS_OK}
-bayes_trials = Trials()
-# Optimize
-best = fmin(fn = objective, space = space, algo = tpe.suggest, max_evals = 100, trials = bayes_trials)
 
-# Print the index of the best parameters
-print(best)
-# Print the values of the best parameters
-print(space_eval(space, best))
+for train_idx, test_idx in outer_cv.split(X, y):
+    X_inner, X_outer = X.iloc[train_idx], X.iloc[test_idx]
+    y_inner, y_outer = y.iloc[train_idx], y.iloc[test_idx]
+
+    # Bayesian Optimization in the inner loop
+    trials = Trials()
+    best_params = fmin(fn=objective, space=space, algo=tpe.suggest, max_evals=20, trials=trials)
+
+    # Train model on the best parameters
+    best_model = RandomForestClassifier(**best_params)
+    best_model.fit(X_inner, y_inner)
+
+    Evaluate on the outer loop test set
+    outer_fold_accuracy = best_model.score(X_outer, y_outer)
+    outer_fold_accuracies.append(outer_fold_accuracy)
+
+print("Outer_fold_accuracues: ")
+print(outer_fold_accuracies)
+
+plt.boxplot(outer_fold_accuracies, patch_artist=True)
+plt.title('Distribution of Accuracies Across Outer Folds')
+plt.ylabel('Accuracy')
+plt.xticks([1], ['Random Forest'])
+plt.show()
+
+
+
 
 
 
